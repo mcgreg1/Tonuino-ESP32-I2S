@@ -1,7 +1,7 @@
 // Define modules to compile:
 #define MQTT_ENABLE
 #define FTP_ENABLE
-#define NEOPIXEL_ENABLE
+//#define NEOPIXEL_ENABLE
 
 #include <ESP32Encoder.h>
 #include "Arduino.h"
@@ -171,6 +171,19 @@ bool enableMqtt = true;
 #endif
 // RFID
 uint8_t const cardIdSize = 4;                           // RFID
+bool rfid_tag_present_prev = false;
+bool rfid_tag_present = false;
+int _rfid_error_counter = 0;
+bool _tag_found = false;
+
+const byte PCS_NO_CHANGE     = 0; // no change detected since last pollCard() call
+const byte PCS_NEW_CARD      = 1; // card with new UID detected (had no card or other card before)
+const byte PCS_CARD_GONE     = 2; // card is not reachable anymore
+const byte PCS_CARD_IS_BACK  = 3; // card was gone, and is now back again
+const byte PCS_READ_ERROR    = 4;
+
+
+
 // Volume
 uint8_t maxVolume = 21;                                 // Maximum volume that can be adjusted
 uint8_t minVolume = 0;                                  // Lowest volume that can be adjusted
@@ -222,6 +235,7 @@ uint8_t currentVolume = initVolume;
 ////////////
 
 // AP-WiFi
+bool wifiOn=false;
 static const char accessPointNetworkSSID[] PROGMEM = "Tonuino";     // Access-point's SSID
 IPAddress apIP(192, 168, 4, 1);                         // Access-point's static IP
 IPAddress apNetmask(255, 255, 255, 0);                  // Access-point's netmask
@@ -352,6 +366,7 @@ void randomizePlaylist (char *str[], const uint32_t count);
 char ** returnPlaylistFromWebstream(const char *_webUrl);
 char ** returnPlaylistFromSD(File _fileOrDirectory);
 void rfidScanner(void *parameter);
+byte pollCard(MFRC522 mfrc522, byte *cardId);
 void sleepHandler(void) ;
 void sortPlaylist(const char** arr, int n);
 bool startsWith(const char *str, const char *pre);
@@ -443,6 +458,13 @@ void buttonHandler() {
         buttons[1].currentState = digitalRead(PREVIOUS_BUTTON);
         buttons[2].currentState = digitalRead(PAUSEPLAY_BUTTON);
         buttons[3].currentState = digitalRead(DREHENCODER_BUTTON);
+
+        if (buttons[0].currentState && buttons[1].currentState && buttons[2].currentState)//all buttons pressed: enable Wifi
+        {
+            wifiOn!=wifiOn;
+            prefsSettings.putBool("wifiOn", wifiOn);
+            loggerNl((char *) FPSTR(wroteWifiEnabledToNVS), LOGLEVEL_INFO);
+        }
 
         // Iterate over all buttons in struct-array
         for (uint8_t i=0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
@@ -1450,6 +1472,8 @@ void playAudio(void *parameter) {
 }
 
 
+
+
 // Instructs RFID-scanner to scan for new RFID-tags
 void rfidScanner(void *parameter) {
     static MFRC522 mfrc522(RFID_CS, RST_PIN);
@@ -1467,50 +1491,104 @@ void rfidScanner(void *parameter) {
         if ((millis() - lastRfidCheckTimestamp) >= 300) {
             lastRfidCheckTimestamp = millis();
             // Reset the loop if no new card is present on the sensor/reader. This saves the entire process when idle.
+            //here the loop
+            byte pollResult = pollCard(mfrc522, cardId);
 
-            if (!mfrc522.PICC_IsNewCardPresent()) {
-                continue;
+            if (pollResult==PCS_CARD_GONE || pollResult==PCS_CARD_IS_BACK)
+            {
+                trackControlToQueueSender(PAUSEPLAY);
             }
-
-            // Select one of the cards
-            if (!mfrc522.PICC_ReadCardSerial()) {
-                continue;
-            }
-
-            //mfrc522.PICC_DumpToSerial(&(mfrc522.uid));
-            mfrc522.PICC_HaltA();
-            mfrc522.PCD_StopCrypto1();
-
-            cardIdString = (char *) malloc(cardIdSize*3 +1);
-            if (cardIdString == NULL) {
-                logger((char *) FPSTR(unableToAllocateMem), LOGLEVEL_ERROR);
-                #ifdef NEOPIXEL_ENABLE
-                    showLedError = true;
-                #endif
-                continue;
-            }
-
-            uint8_t n = 0;
-            logger((char *) FPSTR(rfidTagDetected), LOGLEVEL_NOTICE);
-            for (uint8_t i=0; i<cardIdSize; i++) {
-                cardId[i] = mfrc522.uid.uidByte[i];
-
-                snprintf(logBuf, sizeof(logBuf)/sizeof(logBuf[0]), "%02x", cardId[i]);
-                logger(logBuf, LOGLEVEL_NOTICE);
-
-                n += snprintf (&cardIdString[n], sizeof(cardIdString) / sizeof(cardIdString[0]), "%03d", cardId[i]);
-                if (i<(cardIdSize-1)) {
-                    logger("-", LOGLEVEL_NOTICE);
-                } else {
-                    logger("\n", LOGLEVEL_NOTICE);
+            else if (pollResult==PCS_NEW_CARD)
+            {
+                cardIdString = (char *) malloc(cardIdSize*3 +1);
+                if (cardIdString == NULL) {
+                    logger((char *) FPSTR(unableToAllocateMem), LOGLEVEL_ERROR);
+                    #ifdef NEOPIXEL_ENABLE
+                        showLedError = true;
+                    #endif
+                    continue;
                 }
+
+                uint8_t n = 0;
+                logger((char *) FPSTR(rfidTagDetected), LOGLEVEL_NOTICE);
+                for (uint8_t i=0; i<cardIdSize; i++) {
+                    //cardId[i] = mfrc522.uid.uidByte[i];
+
+                    //snprintf(logBuf, sizeof(logBuf)/sizeof(logBuf[0]), "%02x", cardId[i]);
+                    //logger(logBuf, LOGLEVEL_NOTICE);
+
+                    n += snprintf (&cardIdString[n], sizeof(cardIdString) / sizeof(cardIdString[0]), "%03d", cardId[i]);
+                    if (i<(cardIdSize-1)) {
+                        logger("-", LOGLEVEL_NOTICE);
+                    } else {
+                        logger("\n", LOGLEVEL_NOTICE);
+                    }
+                }
+                xQueueSend(rfidCardQueue, &cardIdString, 0);
+                free(cardIdString);
             }
-            xQueueSend(rfidCardQueue, &cardIdString, 0);
-            free(cardIdString);
         }
     }
     vTaskDelete(NULL);
 }
+
+byte pollCard(MFRC522 mfrc522, byte *cardId)
+{
+    //byte cardId[cardIdSize];
+  rfid_tag_present_prev = rfid_tag_present;
+
+  _rfid_error_counter += 1;
+  if (_rfid_error_counter > 2) 
+  {
+    _tag_found = false;
+  }
+
+  // Detect Tag without looking for collisions
+  byte bufferATQA[2];
+  byte bufferSize = sizeof(bufferATQA);
+
+  // Reset baud rates
+  mfrc522.PCD_WriteRegister(mfrc522.TxModeReg, 0x00);
+  mfrc522.PCD_WriteRegister(mfrc522.RxModeReg, 0x00);
+  // Reset ModWidthReg
+  mfrc522.PCD_WriteRegister(mfrc522.ModWidthReg, 0x26);
+
+  MFRC522::StatusCode result = mfrc522.PICC_RequestA(bufferATQA, &bufferSize);
+
+  if (result == mfrc522.STATUS_OK) 
+  {
+    if ( ! mfrc522.PICC_ReadCardSerial()) 
+    { //Since a PICC placed get Serial and continue
+      return PCS_READ_ERROR;
+    }
+    _rfid_error_counter = 0;
+    _tag_found = true;
+  }
+
+  rfid_tag_present = _tag_found;
+
+  // rising edge: card placed
+  if (rfid_tag_present && !rfid_tag_present_prev) 
+  {
+
+    if (!memcmp(cardId, mfrc522.uid.uidByte, cardIdSize)) //same UUID
+    {
+      return PCS_CARD_IS_BACK; //no change
+    }
+    else 
+    {
+      memcpy(cardId, mfrc522.uid.uidByte, cardIdSize);
+      return PCS_NEW_CARD; //new card    
+    }  
+  }
+  // falling edge: card removed
+  else if (!rfid_tag_present && rfid_tag_present_prev) 
+    return PCS_CARD_GONE;
+    
+  else //present = previous
+    return PCS_NO_CHANGE; //no Change
+}
+
 
 
 // This task handles everything for Neopixel-visualisation
@@ -3046,6 +3124,29 @@ void setup() {
         loggerNl(logBuf, LOGLEVEL_INFO);
     }
 
+    //get mcgreg from NVS
+    // Get MQTT-enable from NVS
+    uint8_t wifiOnSettings = prefsSettings.getUChar("wifiOn", 99);
+    switch (wifiOnSettings) {
+        case 99:
+            prefsSettings.putUChar("wifiOn", wifiOn);
+            loggerNl((char *) FPSTR(wroteWifiEnabledToNVS), LOGLEVEL_ERROR);
+            break;
+        case 1:
+            //prefsSettings.putUChar("enableMQTT", enableMqtt);
+            wifiOn = wifiOnSettings;
+            snprintf(logBuf, sizeof(logBuf) / sizeof(logBuf[0]), "%s: %u", (char *) FPSTR(loadedWifiEnabledFromNVS), wifiOnSettings);
+            loggerNl(logBuf, LOGLEVEL_INFO);
+            break;
+        case 0:
+            wifiOn = wifiOnSettings;
+            snprintf(logBuf, sizeof(logBuf) / sizeof(logBuf[0]), "%s: %u", (char *) FPSTR(loadedWifiEnabledFromNVS), wifiOnSettings);
+            loggerNl(logBuf, LOGLEVEL_INFO);
+            break;
+    }
+   
+
+
 
     // Create 1000Hz-HW-Timer (currently only used for buttons)
     timerSemaphore = xSemaphoreCreateBinary();
@@ -3099,42 +3200,45 @@ void setup() {
     encoder.clearCount();
     encoder.setCount(initVolume*2);         // Ganzes Raster ist immer +2, daher initiale Lautstärke mit 2 multiplizieren
 
-    // Only enable MQTT if requested
-    #ifdef MQTT_ENABLE
-        if (enableMqtt) {
-            MQTTclient.setServer(mqtt_server, 1883);
-            MQTTclient.setCallback(callback);
+
+    if (wifiOn)
+    {
+        wifiManager();
+
+        lastTimeActiveTimestamp = millis();     // initial set after boot
+
+        if (wifiManager() == WL_CONNECTED) {
+            // attach AsyncWebSocket for Mgmt-Interface
+            ws.onEvent(onWebsocketEvent);
+            wServer.addHandler(&ws);
+
+            // attach AsyncEventSource
+            wServer.addHandler(&events);
+
+            wServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+                request->send_P(200, "text/html", mgtWebsite, templateProcessor);
+            });
+
+            wServer.on("/upload", HTTP_POST, [](AsyncWebServerRequest *request){
+                request->send_P(200, "text/html", backupRecoveryWebsite);
+            }, handleUpload);
+
+            wServer.on("/restart", HTTP_GET, [] (AsyncWebServerRequest *request) {
+                request->send_P(200, "text/html", restartWebsite);
+                Serial.flush();
+                ESP.restart();
+            });
+
+            wServer.onNotFound(notFound);
+            wServer.begin();
         }
-    #endif
-
-    wifiManager();
-
-    lastTimeActiveTimestamp = millis();     // initial set after boot
-
-    if (wifiManager() == WL_CONNECTED) {
-        // attach AsyncWebSocket for Mgmt-Interface
-        ws.onEvent(onWebsocketEvent);
-        wServer.addHandler(&ws);
-
-        // attach AsyncEventSource
-        wServer.addHandler(&events);
-
-        wServer.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-            request->send_P(200, "text/html", mgtWebsite, templateProcessor);
-        });
-
-        wServer.on("/upload", HTTP_POST, [](AsyncWebServerRequest *request){
-            request->send_P(200, "text/html", backupRecoveryWebsite);
-        }, handleUpload);
-
-        wServer.on("/restart", HTTP_GET, [] (AsyncWebServerRequest *request) {
-            request->send_P(200, "text/html", restartWebsite);
-            Serial.flush();
-            ESP.restart();
-        });
-
-        wServer.onNotFound(notFound);
-        wServer.begin();
+        // Only enable MQTT if requested
+        #ifdef MQTT_ENABLE
+            if (enableMqtt) {
+                MQTTclient.setServer(mqtt_server, 1883);
+                MQTTclient.setCallback(callback);
+            }
+        #endif
     }
     bootComplete = true;
 
@@ -3156,23 +3260,26 @@ void loop() {
     sleepHandler();
     deepSleepManager();
     rfidPreferenceLookupHandler();
-    if (wifiManager() == WL_CONNECTED) {
-        #ifdef MQTT_ENABLE
-            if (enableMqtt) {
-                reconnect();
-                MQTTclient.loop();
-                postHeartbeatViaMqtt();
+    if (wifiOn)
+    {
+        if (wifiManager() == WL_CONNECTED) {
+            #ifdef MQTT_ENABLE
+                if (enableMqtt) {
+                    reconnect();
+                    MQTTclient.loop();
+                    postHeartbeatViaMqtt();
+                }
+            #endif
+            #ifdef FTP_ENABLE
+                ftpSrv.handleFTP();
+            #endif
+        }
+        #ifdef FTP_ENABLE
+            if (ftpSrv.isConnected()) {
+                lastTimeActiveTimestamp = millis();     // Re-adjust timer while client is connected to avoid ESP falling asleep
             }
         #endif
-        #ifdef FTP_ENABLE
-            ftpSrv.handleFTP();
-        #endif
     }
-    #ifdef FTP_ENABLE
-        if (ftpSrv.isConnected()) {
-            lastTimeActiveTimestamp = millis();     // Re-adjust timer while client is connected to avoid ESP falling asleep
-        }
-    #endif
 }
 
 
