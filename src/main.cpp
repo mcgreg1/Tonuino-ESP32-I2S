@@ -44,7 +44,7 @@
 #define LOGLEVEL_DEBUG                  4           // almost everything
 
 // Serial-logging-configuration
-const uint8_t serialDebug = LOGLEVEL_INFO;          // Current loglevel for serial console
+const uint8_t serialDebug = LOGLEVEL_DEBUG;          // Current loglevel for serial console
 
 // Serial-logging buffer
 char logBuf[160];                                   // Buffer for all log-messages
@@ -98,6 +98,8 @@ char logBuf[160];                                   // Buffer for all log-messag
 #define PREVIOUSTRACK                   5           // Previous track of playlist
 #define FIRSTTRACK                      6           // First track of playlist
 #define LASTTRACK                       7           // Last track of playlist
+#define PAUSE                           8
+#define RESUME                          9
 
 // Playmodes
 #define NO_PLAYLIST                     0           // If no playlist is active
@@ -175,6 +177,7 @@ bool rfid_tag_present_prev = false;
 bool rfid_tag_present = false;
 int _rfid_error_counter = 0;
 bool _tag_found = false;
+byte cardId[cardIdSize];
 
 const byte PCS_NO_CHANGE     = 0; // no change detected since last pollCard() call
 const byte PCS_NEW_CARD      = 1; // card with new UID detected (had no card or other card before)
@@ -235,7 +238,7 @@ uint8_t currentVolume = initVolume;
 ////////////
 
 // AP-WiFi
-bool wifiOn=false;
+bool wifiOn=true;
 static const char accessPointNetworkSSID[] PROGMEM = "Tonuino";     // Access-point's SSID
 IPAddress apIP(192, 168, 4, 1);                         // Access-point's static IP
 IPAddress apNetmask(255, 255, 255, 0);                  // Access-point's netmask
@@ -243,7 +246,7 @@ bool accessPointStarted = false;
 
 
 // MQTT-configuration
-char mqtt_server[16] = "192.168.2.43";                  // IP-address of MQTT-server (if not found in NVS this one will be taken)
+char mqtt_server[16] = "192.168.1.10";                  // IP-address of MQTT-server (if not found in NVS this one will be taken)
 #ifdef MQTT_ENABLE
     #define DEVICE_HOSTNAME "ESP32-Tonuino"                 // Name that that is used for MQTT
     static const char topicSleepCmnd[] PROGMEM = "Cmnd/Tonuino/Sleep";
@@ -366,7 +369,7 @@ void randomizePlaylist (char *str[], const uint32_t count);
 char ** returnPlaylistFromWebstream(const char *_webUrl);
 char ** returnPlaylistFromSD(File _fileOrDirectory);
 void rfidScanner(void *parameter);
-byte pollCard(MFRC522 mfrc522, byte *cardId);
+byte pollCard(MFRC522 mfrc522);
 void sleepHandler(void) ;
 void sortPlaylist(const char** arr, int n);
 bool startsWith(const char *str, const char *pre);
@@ -378,7 +381,7 @@ void trackQueueDispatcher(const char *_sdFile, const uint32_t _lastPlayPos, cons
 void volumeHandler(const int32_t _minVolume, const int32_t _maxVolume);
 void volumeToQueueSender(const int32_t _newVolume);
 wl_status_t wifiManager(void);
-
+void dump_byte_array(byte * buffer, byte bufferSize);
 
 /* Wrapper-Funktion for Serial-logging (with newline) */
 void loggerNl(const char *str, const uint8_t logLevel) {
@@ -458,14 +461,15 @@ void buttonHandler() {
         buttons[1].currentState = digitalRead(PREVIOUS_BUTTON);
         buttons[2].currentState = digitalRead(PAUSEPLAY_BUTTON);
         buttons[3].currentState = digitalRead(DREHENCODER_BUTTON);
-
+/*
         if (buttons[0].currentState && buttons[1].currentState && buttons[2].currentState)//all buttons pressed: enable Wifi
         {
             wifiOn!=wifiOn;
             prefsSettings.putBool("wifiOn", wifiOn);
+            Serial.println("All buttons pressed");
             loggerNl((char *) FPSTR(wroteWifiEnabledToNVS), LOGLEVEL_INFO);
         }
-
+*/
         // Iterate over all buttons in struct-array
         for (uint8_t i=0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
             if (buttons[i].currentState != buttons[i].lastState && currentTimestamp - buttons[i].lastPressedTimestamp > buttonDebounceInterval) {
@@ -1222,7 +1226,30 @@ void playAudio(void *parameter) {
                     }
                     playProperties.pausePlay = !playProperties.pausePlay;
                     continue;
+                
+                case PAUSE:
+                    audio.pauseResume();
+                    trackCommand = 0;
+                    loggerNl((char *) FPSTR(cmndPause), LOGLEVEL_INFO);
+                    if (playProperties.saveLastPlayPosition && !playProperties.pausePlay) {
+                        snprintf(logBuf, sizeof(logBuf) / sizeof(logBuf[0]), "Titel wurde bei Position %u pausiert.", audio.getFilePos());
+                        loggerNl(logBuf, LOGLEVEL_INFO);
+                        nvsRfidWriteWrapper(playProperties.playRfidTag, *(playProperties.playlist + playProperties.currentTrackNumber), audio.getFilePos(), playProperties.playMode, playProperties.currentTrackNumber, playProperties.numberOfTracks);
+                    }
+                    playProperties.pausePlay = true;
+                    continue;
 
+                case RESUME:
+                    audio.pauseResume();
+                    trackCommand = 0;
+                    loggerNl((char *) FPSTR(cmndPause), LOGLEVEL_INFO);
+                    if (playProperties.saveLastPlayPosition && !playProperties.pausePlay) {
+                        snprintf(logBuf, sizeof(logBuf) / sizeof(logBuf[0]), "Titel wurde bei Position %u pausiert.", audio.getFilePos());
+                        loggerNl(logBuf, LOGLEVEL_INFO);
+                        nvsRfidWriteWrapper(playProperties.playRfidTag, *(playProperties.playlist + playProperties.currentTrackNumber), audio.getFilePos(), playProperties.playMode, playProperties.currentTrackNumber, playProperties.numberOfTracks);
+                    }
+                    playProperties.pausePlay = false;
+                    continue;
                 case NEXTTRACK:
                     if (playProperties.pausePlay) {
                         audio.pauseResume();
@@ -1482,21 +1509,25 @@ void rfidScanner(void *parameter) {
     mfrc522.PCD_DumpVersionToSerial();  // Show details of PCD - MFRC522 Card Reader detail
     delay(4);
     loggerNl((char *) FPSTR(rfidScannerReady), LOGLEVEL_DEBUG);
-    byte cardId[cardIdSize];
+    
     char *cardIdString;
 
     for (;;) {
         esp_task_wdt_reset();
         vTaskDelay(10);
-        if ((millis() - lastRfidCheckTimestamp) >= 300) {
+        if ((millis() - lastRfidCheckTimestamp) >= 100) {
             lastRfidCheckTimestamp = millis();
             // Reset the loop if no new card is present on the sensor/reader. This saves the entire process when idle.
             //here the loop
-            byte pollResult = pollCard(mfrc522, cardId);
+            byte pollResult = pollCard(mfrc522);
 
-            if (pollResult==PCS_CARD_GONE || pollResult==PCS_CARD_IS_BACK)
+            if (pollResult==PCS_CARD_GONE)
             {
-                trackControlToQueueSender(PAUSEPLAY);
+                trackControlToQueueSender(PAUSE);
+            }
+            else if (pollResult==PCS_CARD_IS_BACK)
+            {
+                trackControlToQueueSender(RESUME);
             }
             else if (pollResult==PCS_NEW_CARD)
             {
@@ -1527,18 +1558,20 @@ void rfidScanner(void *parameter) {
                 xQueueSend(rfidCardQueue, &cardIdString, 0);
                 free(cardIdString);
             }
+
         }
     }
     vTaskDelete(NULL);
 }
 
-byte pollCard(MFRC522 mfrc522, byte *cardId)
+
+byte pollCard(MFRC522 mfrc522)
 {
     //byte cardId[cardIdSize];
   rfid_tag_present_prev = rfid_tag_present;
 
-  _rfid_error_counter += 1;
-  if (_rfid_error_counter > 2) 
+  _rfid_error_counter ++;
+  if (_rfid_error_counter > 5) 
   {
     _tag_found = false;
   }
@@ -1559,6 +1592,8 @@ byte pollCard(MFRC522 mfrc522, byte *cardId)
   {
     if ( ! mfrc522.PICC_ReadCardSerial()) 
     { //Since a PICC placed get Serial and continue
+      _rfid_error_counter++;
+      Serial.println((String)"Error received RFID: " +_rfid_error_counter);
       return PCS_READ_ERROR;
     }
     _rfid_error_counter = 0;
@@ -1566,7 +1601,6 @@ byte pollCard(MFRC522 mfrc522, byte *cardId)
   }
 
   rfid_tag_present = _tag_found;
-
   // rising edge: card placed
   if (rfid_tag_present && !rfid_tag_present_prev) 
   {
@@ -1589,7 +1623,12 @@ byte pollCard(MFRC522 mfrc522, byte *cardId)
     return PCS_NO_CHANGE; //no Change
 }
 
-
+void dump_byte_array(byte * buffer, byte bufferSize) {
+  for (byte i = 0; i < bufferSize; i++) {
+    Serial.print(buffer[i] < 0x10 ? " 0" : " ");
+    Serial.print(buffer[i], HEX);
+  }
+}
 
 // This task handles everything for Neopixel-visualisation
 #ifdef NEOPIXEL_ENABLE
@@ -3114,6 +3153,7 @@ void setup() {
             break;
     }
     // Get MQTT-server from NVS
+
     String nvsMqttServer = prefsSettings.getString("mqttServer", "-1");
     if (!nvsMqttServer.compareTo("-1")) {
         prefsSettings.putString("mqttServer", (String) mqtt_server);
@@ -3126,6 +3166,7 @@ void setup() {
 
     //get mcgreg from NVS
     // Get MQTT-enable from NVS
+    /*
     uint8_t wifiOnSettings = prefsSettings.getUChar("wifiOn", 99);
     switch (wifiOnSettings) {
         case 99:
@@ -3144,6 +3185,7 @@ void setup() {
             loggerNl(logBuf, LOGLEVEL_INFO);
             break;
     }
+    */
    
 
 
