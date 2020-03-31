@@ -63,7 +63,7 @@ static const char mgtWebsite[] PROGMEM = "<!DOCTYPE html>\
         <form action=\"#rfidMusicTags\" method=\"GET\">\
             <div class=\"form-group col-md-6\">\
                 <label for=\"rfidIdMusic\">RFID-Chip-Nummer</label>\
-                <input type=\"text\" class=\"form-control\" id=\"rfidIdMusic\" maxlength=\"12\" pattern=\"[0-9]{12}\" placeholder=\"012345678912\" name=\"rfidIdMusic\" required>\
+                <input type=\"text\" class=\"form-control\" id=\"rfidIdMusic\" maxlength=\"12\" pattern=\"[a-fA-F0-9]{8}\" placeholder=\"012345678912\" name=\"rfidIdMusic\" required>\
                 <label for=\"fileOrUrl\">Datei, Verzeichnis oder URL (URL nur für Webradio)</label>\
                 <input type=\"text\" class=\"form-control\" id=\"fileOrUrl\" maxlength=\"255\" placeholder=\"z.B. /mp3/Hoerspiele/Yakari/Yakari_und_seine_Freunde.mp3\" name=\"fileOrUrl\" required>\
                 <label for=\"playMode\">Abspielmodus</label>\
@@ -88,7 +88,7 @@ static const char mgtWebsite[] PROGMEM = "<!DOCTYPE html>\
         <form class=\"needs-validation\" action=\"#rfidModTags\" method=\"GET\" novalidate>\
             <div class=\"form-group col-md-6\">\
                 <label for=\"rfidIdMod\">RFID-Chip-Nummer</label>\
-                <input type=\"text\" class=\"form-control\" id=\"rfidIdMod\" maxlength=\"12\" pattern=\"[0-9]{12}\" placeholder=\"012345678912\" name=\"rfidIdMod\" required>\
+                <input type=\"text\" class=\"form-control\" id=\"rfidIdMod\" maxlength=\"12\" pattern=\"[a-fA-F0-9]{8}\" placeholder=\"012345678912\" name=\"rfidIdMod\" required>\
                 <div class=\"invalid-feedback\">\
                   Bitte eine 12-stellige Zahl eingeben.\
                 </div>\

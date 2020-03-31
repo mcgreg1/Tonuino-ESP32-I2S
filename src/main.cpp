@@ -1,7 +1,7 @@
 // Define modules to compile:
 //#define MQTT_ENABLE
 #define FTP_ENABLE
-//#define NEOPIXEL_ENABLE
+#define NEOPIXEL_ENABLE
 
 #include <ESP32Encoder.h>
 #include "Arduino.h"
@@ -85,8 +85,8 @@ char logBuf[160];                                   // Buffer for all log-messag
 
 // Neopixel-configuration
 #ifdef NEOPIXEL_ENABLE
-    #define NUM_LEDS                    24          // number of LEDs
-    #define CHIPSET                     WS2812B     // type of Neopixel
+    #define NUM_LEDS                    12          // number of LEDs
+    #define CHIPSET                     WS2812     // type of Neopixel
     #define COLOR_ORDER                 GRB
 #endif
 
@@ -1225,31 +1225,37 @@ void playAudio(void *parameter) {
                         nvsRfidWriteWrapper(playProperties.playRfidTag, *(playProperties.playlist + playProperties.currentTrackNumber), audio.getFilePos(), playProperties.playMode, playProperties.currentTrackNumber, playProperties.numberOfTracks);
                     }
                     playProperties.pausePlay = !playProperties.pausePlay;
+                    Serial.println("Pauseplay:");
+                    Serial.println(playProperties.pausePlay);
                     continue;
                 
                 case PAUSE:
-                    audio.pauseResume();
-                    trackCommand = 0;
-                    loggerNl((char *) FPSTR(cmndPause), LOGLEVEL_INFO);
-                    if (playProperties.saveLastPlayPosition && !playProperties.pausePlay) {
-                        snprintf(logBuf, sizeof(logBuf) / sizeof(logBuf[0]), "Titel wurde bei Position %u pausiert.", audio.getFilePos());
-                        loggerNl(logBuf, LOGLEVEL_INFO);
-                        nvsRfidWriteWrapper(playProperties.playRfidTag, *(playProperties.playlist + playProperties.currentTrackNumber), audio.getFilePos(), playProperties.playMode, playProperties.currentTrackNumber, playProperties.numberOfTracks);
+                    
+                    if (!playProperties.pausePlay) //not pause
+                    {
+                        audio.pauseResume();
+                        Serial.println("Titel wurde pausiert");
+                        trackCommand = 0;
+                        loggerNl((char *) FPSTR(cmndPause), LOGLEVEL_INFO);
+                        if (playProperties.saveLastPlayPosition && !playProperties.pausePlay) {
+                            snprintf(logBuf, sizeof(logBuf) / sizeof(logBuf[0]), "Titel wurde durch entfernen der Karte bei Position %u pausiert.", audio.getFilePos());
+                            loggerNl(logBuf, LOGLEVEL_INFO);
+                            nvsRfidWriteWrapper(playProperties.playRfidTag, *(playProperties.playlist + playProperties.currentTrackNumber), audio.getFilePos(), playProperties.playMode, playProperties.currentTrackNumber, playProperties.numberOfTracks);
+                        }
+                        playProperties.pausePlay = true;
                     }
-                    playProperties.pausePlay = true;
                     continue;
 
                 case RESUME:
-                    audio.pauseResume();
-                    trackCommand = 0;
-                    loggerNl((char *) FPSTR(cmndPause), LOGLEVEL_INFO);
-                    if (playProperties.saveLastPlayPosition && !playProperties.pausePlay) {
-                        snprintf(logBuf, sizeof(logBuf) / sizeof(logBuf[0]), "Titel wurde bei Position %u pausiert.", audio.getFilePos());
-                        loggerNl(logBuf, LOGLEVEL_INFO);
-                        nvsRfidWriteWrapper(playProperties.playRfidTag, *(playProperties.playlist + playProperties.currentTrackNumber), audio.getFilePos(), playProperties.playMode, playProperties.currentTrackNumber, playProperties.numberOfTracks);
+                    
+                    if (playProperties.pausePlay)//paused
+                    {
+                        audio.pauseResume();
+                        trackCommand = 0;
+                        Serial.println("Titel wurde fortgesetzt");
+                        playProperties.pausePlay = false;
                     }
-                    playProperties.pausePlay = false;
-                    continue;
+                    //continue;
                 case NEXTTRACK:
                     if (playProperties.pausePlay) {
                         audio.pauseResume();
@@ -1510,8 +1516,6 @@ void rfidScanner(void *parameter) {
     delay(4);
     loggerNl((char *) FPSTR(rfidScannerReady), LOGLEVEL_DEBUG);
     
-    char *cardIdString;
-
     for (;;) {
         esp_task_wdt_reset();
         vTaskDelay(10);
@@ -1524,7 +1528,6 @@ void rfidScanner(void *parameter) {
             if (pollResult)
             {
                 dump_byte_array(cardId, 4);
-                Serial.println((String)"Poll time: "+lastRfidCheckTimestamp);
             }
             if (playProperties.playMode == NO_PLAYLIST)
             {
@@ -1549,33 +1552,8 @@ void rfidScanner(void *parameter) {
             else if (pollResult==PCS_NEW_CARD)
             {
                 
-                cardIdString = (char *) malloc(cardIdSize*3 +1);
-                if (cardIdString == NULL) {
-                    logger((char *) FPSTR(unableToAllocateMem), LOGLEVEL_ERROR);
-                    #ifdef NEOPIXEL_ENABLE
-                        showLedError = true;
-                    #endif
-                    continue;
-                }
-                
-                uint8_t n = 0;
-                logger((char *) FPSTR(rfidTagDetected), LOGLEVEL_NOTICE);
-                for (uint8_t i=0; i<cardIdSize; i++) {
-                    //cardId[i] = mfrc522.uid.uidByte[i];
-
-                    //snprintf(logBuf, sizeof(logBuf)/sizeof(logBuf[0]), "%02x", cardId[i]);
-                    //logger(logBuf, LOGLEVEL_NOTICE);
-
-                    n += snprintf (&cardIdString[n], sizeof(cardIdString) / sizeof(cardIdString[0]), "%03d", cardId[i]);
-                    if (i<(cardIdSize-1)) {
-                        logger("-", LOGLEVEL_NOTICE);
-                    } else {
-                        logger("\n", LOGLEVEL_NOTICE);
-                    }
-                }
-                Serial.println((String)"CardID String: "+cardIdString);
-                xQueueSend(rfidCardQueue, &cardIdString, 0);
-                free(cardIdString);
+              
+                xQueueSend(rfidCardQueue, cardId, 0);
             }
 
         }
@@ -2545,7 +2523,7 @@ void doRfidCardModifications(const uint32_t mod) {
 // Tries to lookup RFID-tag-string in NVS and extracts parameter from it if found
 void rfidPreferenceLookupHandler (void) {
     BaseType_t rfidStatus;
-    char *rfidTagId;
+    char rfidTagId[4];
     char _file[255];
     uint32_t _lastPlayPos = 0;
     uint16_t _trackLastPlayed = 0;
@@ -2554,6 +2532,11 @@ void rfidPreferenceLookupHandler (void) {
     rfidStatus = xQueueReceive(rfidCardQueue, &rfidTagId, 0);
     if (rfidStatus == pdPASS) {
         lastTimeActiveTimestamp = millis();
+        Serial.println("Card in queue:");
+        dump_byte_array(cardId, 4);
+
+        sprintf(rfidTagId, "%02x%02x%02x%02x", cardId[0],cardId[1],cardId[2],cardId[3]); 
+
         snprintf(logBuf, sizeof(logBuf)/sizeof(logBuf[0]), "%s: %s", (char *) FPSTR(rfidTagReceived), rfidTagId);
         currentRfidTagId = strdup(rfidTagId);
         sendWebsocketData(0, 10);       // Push new rfidTagId to all websocket-clients
