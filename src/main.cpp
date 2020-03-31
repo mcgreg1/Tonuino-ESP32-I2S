@@ -172,6 +172,8 @@ bool enableMqtt = true;
     uint8_t const stillOnlineInterval = 60;                 // Interval 'I'm still alive' is sent via MQTT (in seconds)
 #endif
 // RFID
+#define RFID_ERROR_COUNTER 5
+#define RFID_SCAN_INTERVALL 140 //in ms
 uint8_t const cardIdSize = 4;                           // RFID
 bool rfid_tag_present_prev = false;
 bool rfid_tag_present = false;
@@ -1225,8 +1227,6 @@ void playAudio(void *parameter) {
                         nvsRfidWriteWrapper(playProperties.playRfidTag, *(playProperties.playlist + playProperties.currentTrackNumber), audio.getFilePos(), playProperties.playMode, playProperties.currentTrackNumber, playProperties.numberOfTracks);
                     }
                     playProperties.pausePlay = !playProperties.pausePlay;
-                    Serial.println("Pauseplay:");
-                    Serial.println(playProperties.pausePlay);
                     continue;
                 
                 case PAUSE:
@@ -1234,7 +1234,6 @@ void playAudio(void *parameter) {
                     if (!playProperties.pausePlay) //not pause
                     {
                         audio.pauseResume();
-                        Serial.println("Titel wurde pausiert");
                         trackCommand = 0;
                         loggerNl((char *) FPSTR(cmndPause), LOGLEVEL_INFO);
                         if (playProperties.saveLastPlayPosition && !playProperties.pausePlay) {
@@ -1252,7 +1251,7 @@ void playAudio(void *parameter) {
                     {
                         audio.pauseResume();
                         trackCommand = 0;
-                        Serial.println("Titel wurde fortgesetzt");
+                        loggerNl("Titel wurde fortgesetzt", LOGLEVEL_INFO);
                         playProperties.pausePlay = false;
                     }
                     //continue;
@@ -1519,16 +1518,12 @@ void rfidScanner(void *parameter) {
     for (;;) {
         esp_task_wdt_reset();
         vTaskDelay(10);
-        if ((millis() - lastRfidCheckTimestamp) >= 100) 
+        if ((millis() - lastRfidCheckTimestamp) >= RFID_SCAN_INTERVALL) 
         {
             lastRfidCheckTimestamp = millis();
             // Reset the loop if no new card is present on the sensor/reader. This saves the entire process when idle.
             //here the loop
             byte pollResult = pollCard(mfrc522);
-            if (pollResult)
-            {
-                dump_byte_array(cardId, 4);
-            }
             if (playProperties.playMode == NO_PLAYLIST)
             {
                 if (pollResult==PCS_CARD_IS_BACK)
@@ -1536,11 +1531,8 @@ void rfidScanner(void *parameter) {
                     //if there is no playlist, and a card has been place, handle it as NEW CARD
                     Serial.println("Handling as new card, because no playlist");//TODO: MODIFIER
                     pollResult=PCS_NEW_CARD;
-
                 }
-
             }
-
             if (pollResult==PCS_CARD_GONE)
             {
                 trackControlToQueueSender(PAUSE);
@@ -1551,11 +1543,8 @@ void rfidScanner(void *parameter) {
             }
             else if (pollResult==PCS_NEW_CARD)
             {
-                
-              
                 xQueueSend(rfidCardQueue, cardId, 0);
             }
-
         }
     }
     vTaskDelete(NULL);
@@ -1571,7 +1560,7 @@ byte pollCard(MFRC522 mfrc522)
   rfid_tag_present_prev = rfid_tag_present;
 
   _rfid_error_counter ++;
-  if (_rfid_error_counter > 5) 
+  if (_rfid_error_counter > RFID_ERROR_COUNTER) 
   {
     _tag_found = false;
   }
@@ -2532,8 +2521,8 @@ void rfidPreferenceLookupHandler (void) {
     rfidStatus = xQueueReceive(rfidCardQueue, &rfidTagId, 0);
     if (rfidStatus == pdPASS) {
         lastTimeActiveTimestamp = millis();
-        Serial.println("Card in queue:");
-        dump_byte_array(cardId, 4);
+        //Serial.println("Card in queue:");
+        //dump_byte_array(cardId, 4);
 
         sprintf(rfidTagId, "%02x%02x%02x%02x", cardId[0],cardId[1],cardId[2],cardId[3]); 
 
