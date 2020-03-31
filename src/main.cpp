@@ -1,5 +1,5 @@
 // Define modules to compile:
-#define MQTT_ENABLE
+//#define MQTT_ENABLE
 #define FTP_ENABLE
 //#define NEOPIXEL_ENABLE
 
@@ -1515,11 +1515,28 @@ void rfidScanner(void *parameter) {
     for (;;) {
         esp_task_wdt_reset();
         vTaskDelay(10);
-        if ((millis() - lastRfidCheckTimestamp) >= 100) {
+        if ((millis() - lastRfidCheckTimestamp) >= 100) 
+        {
             lastRfidCheckTimestamp = millis();
             // Reset the loop if no new card is present on the sensor/reader. This saves the entire process when idle.
             //here the loop
             byte pollResult = pollCard(mfrc522);
+            if (pollResult)
+            {
+                dump_byte_array(cardId, 4);
+                Serial.println((String)"Poll time: "+lastRfidCheckTimestamp);
+            }
+            if (playProperties.playMode == NO_PLAYLIST)
+            {
+                if (pollResult==PCS_CARD_IS_BACK)
+                {
+                    //if there is no playlist, and a card has been place, handle it as NEW CARD
+                    Serial.println("Handling as new card, because no playlist");//TODO: MODIFIER
+                    pollResult=PCS_NEW_CARD;
+
+                }
+
+            }
 
             if (pollResult==PCS_CARD_GONE)
             {
@@ -1531,6 +1548,7 @@ void rfidScanner(void *parameter) {
             }
             else if (pollResult==PCS_NEW_CARD)
             {
+                
                 cardIdString = (char *) malloc(cardIdSize*3 +1);
                 if (cardIdString == NULL) {
                     logger((char *) FPSTR(unableToAllocateMem), LOGLEVEL_ERROR);
@@ -1539,7 +1557,7 @@ void rfidScanner(void *parameter) {
                     #endif
                     continue;
                 }
-
+                
                 uint8_t n = 0;
                 logger((char *) FPSTR(rfidTagDetected), LOGLEVEL_NOTICE);
                 for (uint8_t i=0; i<cardIdSize; i++) {
@@ -1555,6 +1573,7 @@ void rfidScanner(void *parameter) {
                         logger("\n", LOGLEVEL_NOTICE);
                     }
                 }
+                Serial.println((String)"CardID String: "+cardIdString);
                 xQueueSend(rfidCardQueue, &cardIdString, 0);
                 free(cardIdString);
             }
@@ -1563,6 +1582,9 @@ void rfidScanner(void *parameter) {
     }
     vTaskDelete(NULL);
 }
+
+
+
 
 
 byte pollCard(MFRC522 mfrc522)
@@ -1616,8 +1638,17 @@ byte pollCard(MFRC522 mfrc522)
     }  
   }
   // falling edge: card removed
-  else if (!rfid_tag_present && rfid_tag_present_prev) 
+  else if (!rfid_tag_present && rfid_tag_present_prev)
+  {
+      /*
+      cardId[0]=0;
+      cardId[1]=0;
+      cardId[2]=0;
+      cardId[3]=0;
+        */
     return PCS_CARD_GONE;
+  } 
+    
     
   else //present = previous
     return PCS_NO_CHANGE; //no Change
@@ -1628,6 +1659,7 @@ void dump_byte_array(byte * buffer, byte bufferSize) {
     Serial.print(buffer[i] < 0x10 ? " 0" : " ");
     Serial.print(buffer[i], HEX);
   }
+  Serial.println();
 }
 
 // This task handles everything for Neopixel-visualisation
@@ -2569,7 +2601,6 @@ void rfidPreferenceLookupHandler (void) {
     }
 }
 
-
 // Initialize soft access-point
 void accessPointStart(const char *SSID, IPAddress ip, IPAddress netmask) {
     WiFi.mode(WIFI_AP);
@@ -3245,6 +3276,7 @@ void setup() {
 
     if (wifiOn)
     {
+        Serial.println("Wifi is enabled!");
         wifiManager();
 
         lastTimeActiveTimestamp = millis();     // initial set after boot
