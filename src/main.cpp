@@ -1528,10 +1528,6 @@ void rfidScanner(void *parameter) {
             if (pollResult)
             {
                 dump_byte_array(cardId, 4);
-<<<<<<< HEAD
-=======
-                Serial.println((String)"Poll time: "+lastRfidCheckTimestamp);
->>>>>>> 6ae69d65c74cb86e60dc0805e7905e9c65101b29
             }
             if (playProperties.playMode == NO_PLAYLIST)
             {
@@ -1556,38 +1552,8 @@ void rfidScanner(void *parameter) {
             else if (pollResult==PCS_NEW_CARD)
             {
                 
-<<<<<<< HEAD
               
                 xQueueSend(rfidCardQueue, cardId, 0);
-=======
-                cardIdString = (char *) malloc(cardIdSize*3 +1);
-                if (cardIdString == NULL) {
-                    logger((char *) FPSTR(unableToAllocateMem), LOGLEVEL_ERROR);
-                    #ifdef NEOPIXEL_ENABLE
-                        showLedError = true;
-                    #endif
-                    continue;
-                }
-                
-                uint8_t n = 0;
-                logger((char *) FPSTR(rfidTagDetected), LOGLEVEL_NOTICE);
-                for (uint8_t i=0; i<cardIdSize; i++) {
-                    //cardId[i] = mfrc522.uid.uidByte[i];
-
-                    //snprintf(logBuf, sizeof(logBuf)/sizeof(logBuf[0]), "%02x", cardId[i]);
-                    //logger(logBuf, LOGLEVEL_NOTICE);
-
-                    n += snprintf (&cardIdString[n], sizeof(cardIdString) / sizeof(cardIdString[0]), "%03d", cardId[i]);
-                    if (i<(cardIdSize-1)) {
-                        logger("-", LOGLEVEL_NOTICE);
-                    } else {
-                        logger("\n", LOGLEVEL_NOTICE);
-                    }
-                }
-                Serial.println((String)"CardID String: "+cardIdString);
-                xQueueSend(rfidCardQueue, &cardIdString, 0);
-                free(cardIdString);
->>>>>>> 6ae69d65c74cb86e60dc0805e7905e9c65101b29
             }
 
         }
