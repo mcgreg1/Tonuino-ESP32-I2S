@@ -1,5 +1,5 @@
 // Define modules to compile:
-//#define MQTT_ENABLE
+#define MQTT_ENABLE
 #define FTP_ENABLE
 #define NEOPIXEL_ENABLE
 
@@ -173,19 +173,20 @@ bool enableMqtt = true;
 #endif
 // RFID
 #define RFID_ERROR_COUNTER 5
-#define RFID_SCAN_INTERVALL 140 //in ms
+#define RFID_SCAN_INTERVALL 100 //in ms
 uint8_t const cardIdSize = 4;                           // RFID
 bool rfid_tag_present_prev = false;
 bool rfid_tag_present = false;
-int _rfid_error_counter = 0;
+uint8_t _rfid_error_counter = 0;
 bool _tag_found = false;
 byte cardId[cardIdSize];
+byte lastMusicCard[cardIdSize];
 
-const byte PCS_NO_CHANGE     = 0; // no change detected since last pollCard() call
-const byte PCS_NEW_CARD      = 1; // card with new UID detected (had no card or other card before)
-const byte PCS_CARD_GONE     = 2; // card is not reachable anymore
-const byte PCS_CARD_IS_BACK  = 3; // card was gone, and is now back again
-const byte PCS_READ_ERROR    = 4;
+#define PCS_NO_CHANGE 0
+#define PCS_NEW_CARD 1
+#define PCS_CARD_GONE 2
+#define PCS_CARD_IS_BACK 3
+#define PCS_READ_ERROR 4
 
 
 
@@ -372,7 +373,11 @@ char ** returnPlaylistFromWebstream(const char *_webUrl);
 char ** returnPlaylistFromSD(File _fileOrDirectory);
 void rfidScanner(void *parameter);
 byte pollCard(MFRC522 mfrc522);
+void forgetCard();
 void sleepHandler(void) ;
+
+void playSingleTrack(char* filename);
+
 void sortPlaylist(const char** arr, int n);
 bool startsWith(const char *str, const char *pre);
 String templateProcessor(const String& templ);
@@ -463,15 +468,30 @@ void buttonHandler() {
         buttons[1].currentState = digitalRead(PREVIOUS_BUTTON);
         buttons[2].currentState = digitalRead(PAUSEPLAY_BUTTON);
         buttons[3].currentState = digitalRead(DREHENCODER_BUTTON);
-/*
-        if (buttons[0].currentState && buttons[1].currentState && buttons[2].currentState)//all buttons pressed: enable Wifi
+        if (!buttons[0].currentState && buttons[0].lastState && !buttons[2].currentState)//all buttons pressed: enable Wifi
         {
-            wifiOn!=wifiOn;
+
+            wifiOn=true;
             prefsSettings.putBool("wifiOn", wifiOn);
-            Serial.println("All buttons pressed");
+            Serial.println("Wifi enabled");
+            Serial.println(wifiOn);
             loggerNl((char *) FPSTR(wroteWifiEnabledToNVS), LOGLEVEL_INFO);
+
+
+            
         }
-*/
+        else if (!buttons[1].currentState && buttons[1].lastState && !buttons[2].currentState)//all buttons pressed: enable Wifi
+        {
+
+            wifiOn=false;
+            prefsSettings.putBool("wifiOn", wifiOn);
+            Serial.println("Wifi disabled!");
+            Serial.println(wifiOn);
+            loggerNl((char *) FPSTR(wroteWifiEnabledToNVS), LOGLEVEL_INFO);
+
+
+            
+        }
         // Iterate over all buttons in struct-array
         for (uint8_t i=0; i < sizeof(buttons) / sizeof(buttons[0]); i++) {
             if (buttons[i].currentState != buttons[i].lastState && currentTimestamp - buttons[i].lastPressedTimestamp > buttonDebounceInterval) {
@@ -673,9 +693,12 @@ void callback(const char *topic, const byte *payload, uint32_t length) {
     }
 
     // New track to play? Take RFID-ID as input
-    else if (strcmp_P(topic, topicTrackCmnd) == 0) {
+    else if (strcmp_P(topic, topicTrackCmnd) == 0) 
+    {
         char *_rfidId = strdup(receivedString);
-        xQueueSend(rfidCardQueue, &_rfidId, 0);
+        Serial.println((String)"New track from MQTT "+_rfidId);
+        xQueueSend(rfidCardQueue, _rfidId, 0);
+        delay(1000);
         free(_rfidId);
     }
     // Loudness to change?
@@ -1236,7 +1259,7 @@ void playAudio(void *parameter) {
                         audio.pauseResume();
                         trackCommand = 0;
                         loggerNl((char *) FPSTR(cmndPause), LOGLEVEL_INFO);
-                        if (playProperties.saveLastPlayPosition && !playProperties.pausePlay) {
+                        if (playProperties.saveLastPlayPosition) {
                             snprintf(logBuf, sizeof(logBuf) / sizeof(logBuf[0]), "Titel wurde durch entfernen der Karte bei Position %u pausiert.", audio.getFilePos());
                             loggerNl(logBuf, LOGLEVEL_INFO);
                             nvsRfidWriteWrapper(playProperties.playRfidTag, *(playProperties.playlist + playProperties.currentTrackNumber), audio.getFilePos(), playProperties.playMode, playProperties.currentTrackNumber, playProperties.numberOfTracks);
@@ -1254,7 +1277,7 @@ void playAudio(void *parameter) {
                         loggerNl("Titel wurde fortgesetzt", LOGLEVEL_INFO);
                         playProperties.pausePlay = false;
                     }
-                    //continue;
+                    continue;
                 case NEXTTRACK:
                     if (playProperties.pausePlay) {
                         audio.pauseResume();
@@ -1524,33 +1547,51 @@ void rfidScanner(void *parameter) {
             // Reset the loop if no new card is present on the sensor/reader. This saves the entire process when idle.
             //here the loop
             byte pollResult = pollCard(mfrc522);
-            if (playProperties.playMode == NO_PLAYLIST)
-            {
-                if (pollResult==PCS_CARD_IS_BACK)
+            if (pollResult)
+                Serial.println((String)"Poll Result: "+pollResult);
+            //compare to previous poll
+
+                if (playProperties.playMode == NO_PLAYLIST)
                 {
-                    //if there is no playlist, and a card has been place, handle it as NEW CARD
-                    Serial.println("Handling as new card, because no playlist");//TODO: MODIFIER
-                    pollResult=PCS_NEW_CARD;
+                    if (pollResult==PCS_CARD_IS_BACK)
+                    {
+                        //if there is no playlist, and a card has been place, handle it as NEW CARD
+                        Serial.println("Handling as new card, because no playlist");//TODO: MODIFIER
+                        pollResult=PCS_NEW_CARD;
+                    }
                 }
-            }
-            if (pollResult==PCS_CARD_GONE)
-            {
-                trackControlToQueueSender(PAUSE);
-            }
-            else if (pollResult==PCS_CARD_IS_BACK)
-            {
-                trackControlToQueueSender(RESUME);
-            }
-            else if (pollResult==PCS_NEW_CARD)
-            {
-                xQueueSend(rfidCardQueue, cardId, 0);
-            }
+                if (pollResult==PCS_NEW_CARD)
+                {
+                    if (!lockControls && !memcmp(cardId, lastMusicCard, cardIdSize)) //same UUID
+                    {
+                        Serial.println("Last music card was placed");
+                        pollResult=PCS_CARD_IS_BACK; //no change
+                    }
+                    else
+                    {
+                        xQueueSend(rfidCardQueue, "000000", 0);
+                    }
+                }
+                if (pollResult==PCS_CARD_GONE && !lockControls)
+                {
+                        trackControlToQueueSender(PAUSE);
+                }
+                if (pollResult==PCS_CARD_IS_BACK && !lockControls)
+                {
+                        trackControlToQueueSender(RESUME);
+                }
         }
     }
     vTaskDelete(NULL);
 }
 
-
+void forgetCard()
+{
+    cardId[0]=0;
+    cardId[1]=0;
+    cardId[2]=0;
+    cardId[3]=0;
+}
 
 
 
@@ -1982,7 +2023,33 @@ void volumeHandler(const int32_t _minVolume, const int32_t _maxVolume) {
         }
     }
 }
+void playSingleTrack(char* filename)
+{
+    char **musicFiles;
+    musicFiles = returnPlaylistFromSD(SD.open(filename));
+    playProperties.playMode = SINGLE_TRACK;
+    // Set some default-values
+    playProperties.repeatCurrentTrack = false;
+    playProperties.repeatPlaylist = false;
+    playProperties.sleepAfterCurrentTrack = false;
+    playProperties.sleepAfterPlaylist = false;
+    playProperties.saveLastPlayPosition = false;
+    playProperties.playUntilTrackNumber = 0;
 
+    if (musicFiles!=NULL)
+    {
+
+            loggerNl((char *) FPSTR(modeSingleTrack), LOGLEVEL_NOTICE);
+            #ifdef MQTT_ENABLE
+                publishMqtt((char *) FPSTR(topicPlaymodeState), playProperties.playMode, false);
+                publishMqtt((char *) FPSTR(topicRepeatModeState), NO_REPEAT, false);
+            #endif
+            xQueueSend(trackQueue, &(musicFiles), 0);
+    }
+    else
+        Serial.println("No files found!");
+
+}
 
 // Receives de-serialized RFID-data (from NVS) and dispatches playlists for the given
 // playmode to the track-queue.
@@ -2517,14 +2584,26 @@ void rfidPreferenceLookupHandler (void) {
     uint32_t _lastPlayPos = 0;
     uint16_t _trackLastPlayed = 0;
     uint32_t _playMode = 1;
-
+    bool isMqtt=false;
     rfidStatus = xQueueReceive(rfidCardQueue, &rfidTagId, 0);
     if (rfidStatus == pdPASS) {
         lastTimeActiveTimestamp = millis();
         //Serial.println("Card in queue:");
         //dump_byte_array(cardId, 4);
-
-        sprintf(rfidTagId, "%02x%02x%02x%02x", cardId[0],cardId[1],cardId[2],cardId[3]); 
+        
+        if (!memcmp("000000", rfidTagId, 4))
+        {
+            Serial.println("Received from RFID");
+            sprintf(rfidTagId, "%02x%02x%02x%02x", cardId[0],cardId[1],cardId[2],cardId[3]);     
+        }
+        else
+        {
+            Serial.println("Received from MQTT");
+            Serial.println(rfidTagId);
+            playSingleTrack(rfidTagId);
+        }
+            
+        
 
         snprintf(logBuf, sizeof(logBuf)/sizeof(logBuf[0]), "%s: %s", (char *) FPSTR(rfidTagReceived), rfidTagId);
         currentRfidTagId = strdup(rfidTagId);
@@ -2565,8 +2644,15 @@ void rfidPreferenceLookupHandler (void) {
         } else {
         // Only pass file to queue if strtok revealed 3 items
             if (_playMode >= 100) {
+                trackControlToQueueSender(RESUME);
+                forgetCard();
                 doRfidCardModifications(_playMode);
-            } else {
+            } else if (!lockControls)
+            {
+                for (i=0; i<4; i++)
+                {
+                    lastMusicCard[i]=cardId[i];
+                }
                 trackQueueDispatcher(_file, _lastPlayPos, _playMode, _trackLastPlayed);
             }
         }
@@ -3169,7 +3255,7 @@ void setup() {
 
     //get mcgreg from NVS
     // Get MQTT-enable from NVS
-    /*
+    
     uint8_t wifiOnSettings = prefsSettings.getUChar("wifiOn", 99);
     switch (wifiOnSettings) {
         case 99:
@@ -3188,7 +3274,7 @@ void setup() {
             loggerNl(logBuf, LOGLEVEL_INFO);
             break;
     }
-    */
+    
    
 
 
@@ -3214,7 +3300,7 @@ void setup() {
     xTaskCreatePinnedToCore(
         playAudio, /* Function to implement the task */
         "mp3play", /* Name of the task */
-        11000,  /* Stack size in words */
+        15000,  /* Stack size in words */
         NULL,  /* Task input parameter */
         2 | portPRIVILEGE_BIT,  /* Priority of the task */
         &mp3Play,  /* Task handle. */
