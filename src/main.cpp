@@ -1,7 +1,7 @@
 // Define modules to compile:
-#define MQTT_ENABLE
+//#define MQTT_ENABLE
 #define FTP_ENABLE
-#define NEOPIXEL_ENABLE
+//#define NEOPIXEL_ENABLE
 
 #include <ESP32Encoder.h>
 #include "Arduino.h"
@@ -247,6 +247,7 @@ IPAddress apIP(192, 168, 4, 1);                         // Access-point's static
 IPAddress apNetmask(255, 255, 255, 0);                  // Access-point's netmask
 bool accessPointStarted = false;
 
+//const char mqttFile[100];
 
 // MQTT-configuration
 char mqtt_server[16] = "192.168.1.10";                  // IP-address of MQTT-server (if not found in NVS this one will be taken)
@@ -468,7 +469,45 @@ void buttonHandler() {
         buttons[1].currentState = digitalRead(PREVIOUS_BUTTON);
         buttons[2].currentState = digitalRead(PAUSEPLAY_BUTTON);
         buttons[3].currentState = digitalRead(DREHENCODER_BUTTON);
-        if (!buttons[0].currentState && buttons[0].lastState && !buttons[2].currentState)//all buttons pressed: enable Wifi
+        if (!buttons[3].currentState && buttons[3].lastState)
+        {
+            Serial.println("Drehencoder pressed!");
+            char *_rfidId =new char(50);
+            int choice=rand()%99;
+            if (choice>50)
+                _rfidId="/01/002.mp3";
+            else
+                _rfidId="9b1aa200";
+            Serial.println((String)"New track from MQTT "+_rfidId);
+
+            //check if it is a path or rfid
+            if (_rfidId[0] == '/')
+            {
+                Serial.println("Play Track");
+                playSingleTrack(_rfidId);
+            }
+            else
+            {
+                Serial.println("RFID Queue");
+                xQueueSend(rfidCardQueue, _rfidId, 0);
+                
+            }
+            //
+            
+            //free(_rfidId);
+
+            /*
+            //playSingleTrack("/01/002.mp3");
+            char * fileName = new char(50);
+            fileName = "123456789mp3";
+            //char _rfidId[] = "/01/002.mp3";
+            Serial.println((String)"New track from MQTT "+fileName);
+            xQueueSend(rfidCardQueue, fileName, 0);
+            //free(_rfidId);
+            */
+        }
+
+        if (!buttons[0].currentState && buttons[0].lastState && !buttons[2].currentState)//enable Wifi
         {
 
             wifiOn=true;
@@ -480,7 +519,7 @@ void buttonHandler() {
 
             
         }
-        else if (!buttons[1].currentState && buttons[1].lastState && !buttons[2].currentState)//all buttons pressed: enable Wifi
+        else if (!buttons[1].currentState && buttons[1].lastState && !buttons[2].currentState)//disable Wifi
         {
 
             wifiOn=false;
@@ -697,8 +736,18 @@ void callback(const char *topic, const byte *payload, uint32_t length) {
     {
         char *_rfidId = strdup(receivedString);
         Serial.println((String)"New track from MQTT "+_rfidId);
-        xQueueSend(rfidCardQueue, _rfidId, 0);
-        delay(1000);
+
+        //check if it is a path or rfid
+        if (_rfidId[0] == '/')
+        {
+            playSingleTrack(_rfidId);
+        }
+        else
+        {
+            xQueueSend(rfidCardQueue, _rfidId, 0);
+        }
+        //
+        
         free(_rfidId);
     }
     // Loudness to change?
@@ -1194,7 +1243,8 @@ void playAudio(void *parameter) {
 
                 // If we're in audiobook-mode and apply a modification-card, we don't
                 // want to save lastPlayPosition for the mod-card but for the card that holds the playlist
-                strncpy(playProperties.playRfidTag, currentRfidTagId, sizeof(playProperties.playRfidTag) / sizeof(playProperties.playRfidTag[0]));
+                if (currentRfidTagId!=NULL || playProperties.playRfidTag[0] !=NULL)
+                    strncpy(playProperties.playRfidTag, currentRfidTagId, sizeof(playProperties.playRfidTag) / sizeof(playProperties.playRfidTag[0]));
             }
             if (playProperties.trackFinished) {
                 playProperties.trackFinished = false;
@@ -1433,7 +1483,6 @@ void playAudio(void *parameter) {
                 gotoSleep = true;
                 continue;
             }
-
             if (playProperties.currentTrackNumber >= playProperties.numberOfTracks) {         // Check if last element of playlist is already reached
                 loggerNl((char *) FPSTR(endOfPlaylistReached), LOGLEVEL_NOTICE);
                 if (!playProperties.repeatPlaylist) {
@@ -1648,12 +1697,6 @@ byte pollCard(MFRC522 mfrc522)
   // falling edge: card removed
   else if (!rfid_tag_present && rfid_tag_present_prev)
   {
-      /*
-      cardId[0]=0;
-      cardId[1]=0;
-      cardId[2]=0;
-      cardId[3]=0;
-        */
     return PCS_CARD_GONE;
   } 
     
@@ -2026,7 +2069,11 @@ void volumeHandler(const int32_t _minVolume, const int32_t _maxVolume) {
 void playSingleTrack(char* filename)
 {
     char **musicFiles;
+    Serial.print("Try to open: ");
+    Serial.println(filename);
     musicFiles = returnPlaylistFromSD(SD.open(filename));
+    
+
     playProperties.playMode = SINGLE_TRACK;
     // Set some default-values
     playProperties.repeatCurrentTrack = false;
@@ -2035,9 +2082,13 @@ void playSingleTrack(char* filename)
     playProperties.sleepAfterPlaylist = false;
     playProperties.saveLastPlayPosition = false;
     playProperties.playUntilTrackNumber = 0;
+    playProperties.numberOfTracks=1;
+
 
     if (musicFiles!=NULL)
     {
+            Serial.print("Music files: ");
+            Serial.println(musicFiles[0]);
 
             loggerNl((char *) FPSTR(modeSingleTrack), LOGLEVEL_NOTICE);
             #ifdef MQTT_ENABLE
@@ -2584,7 +2635,6 @@ void rfidPreferenceLookupHandler (void) {
     uint32_t _lastPlayPos = 0;
     uint16_t _trackLastPlayed = 0;
     uint32_t _playMode = 1;
-    bool isMqtt=false;
     rfidStatus = xQueueReceive(rfidCardQueue, &rfidTagId, 0);
     if (rfidStatus == pdPASS) {
         lastTimeActiveTimestamp = millis();
@@ -2594,17 +2644,21 @@ void rfidPreferenceLookupHandler (void) {
         if (!memcmp("000000", rfidTagId, 4))
         {
             Serial.println("Received from RFID");
-            sprintf(rfidTagId, "%02x%02x%02x%02x", cardId[0],cardId[1],cardId[2],cardId[3]);     
+            for (uint8_t i=0; i<cardIdSize; i++)
+            {
+                sprintf(rfidTagId+i*2, "%02x", cardId[i]);//two digits for each byte
+                Serial.println((String)i+": "+rfidTagId);
+
+            }
+   
         }
         else
         {
             Serial.println("Received from MQTT");
             Serial.println(rfidTagId);
-            playSingleTrack(rfidTagId);
         }
             
         
-
         snprintf(logBuf, sizeof(logBuf)/sizeof(logBuf[0]), "%s: %s", (char *) FPSTR(rfidTagReceived), rfidTagId);
         currentRfidTagId = strdup(rfidTagId);
         sendWebsocketData(0, 10);       // Push new rfidTagId to all websocket-clients
@@ -3126,8 +3180,8 @@ void setup() {
     if (volumeQueue == NULL) {
         loggerNl((char *) FPSTR(unableToCreateVolQ), LOGLEVEL_ERROR);
     }
-
-    rfidCardQueue = xQueueCreate(1, (cardIdSize + 1) * sizeof(char));
+    //accept also filenames
+    rfidCardQueue = xQueueCreate(1, (cardIdSize*2) * sizeof(byte));
     if (rfidCardQueue == NULL) {
         loggerNl((char *) FPSTR(unableToCreateRfidQ), LOGLEVEL_ERROR);
     }
