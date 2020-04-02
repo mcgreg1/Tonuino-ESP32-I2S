@@ -1,7 +1,7 @@
 // Define modules to compile:
-//#define MQTT_ENABLE
+#define MQTT_ENABLE
 #define FTP_ENABLE
-//#define NEOPIXEL_ENABLE
+#define NEOPIXEL_ENABLE
 
 #include <ESP32Encoder.h>
 #include "Arduino.h"
@@ -471,7 +471,9 @@ void buttonHandler() {
         buttons[3].currentState = digitalRead(DREHENCODER_BUTTON);
         if (!buttons[3].currentState && buttons[3].lastState)
         {
+            
             Serial.println("Drehencoder pressed!");
+            /*
             char *_rfidId =new char(50);
             int choice=rand()%99;
             if (choice>50)
@@ -493,17 +495,6 @@ void buttonHandler() {
                 
             }
             //
-            
-            //free(_rfidId);
-
-            /*
-            //playSingleTrack("/01/002.mp3");
-            char * fileName = new char(50);
-            fileName = "123456789mp3";
-            //char _rfidId[] = "/01/002.mp3";
-            Serial.println((String)"New track from MQTT "+fileName);
-            xQueueSend(rfidCardQueue, fileName, 0);
-            //free(_rfidId);
             */
         }
 
