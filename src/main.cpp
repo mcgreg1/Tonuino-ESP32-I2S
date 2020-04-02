@@ -1999,9 +1999,9 @@ void deepSleepManager(void) {
         #endif
         /*SPI.end();
         spiSD.end();*/
-        digitalWrite(POWER, LOW);
+        digitalWrite(POWER, HIGH);
         delay(200);
-        esp_deep_sleep_start();
+        //esp_deep_sleep_start();
     }
 }
 
@@ -3128,7 +3128,7 @@ void setup() {
     Serial.begin(115200);
     srand(esp_random());
     pinMode(POWER, OUTPUT);
-    digitalWrite(POWER, HIGH);
+    digitalWrite(POWER, LOW);
     prefsRfid.begin((char *) FPSTR(prefsRfidNamespace));
     prefsSettings.begin((char *) FPSTR(prefsSettingsNamespace));
 
